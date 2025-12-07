@@ -2,8 +2,8 @@ pipeline {
     agent any
 
     environment {
-        GITHUB_REPO_URL = "https://github.com/aniketchougule108/E-commerce-SpringBoot-Project-Deployment.git"
-        GIT_BRANCH      = "main"
+        GITHUB_REPO_URL = "https://github.com/aniketchougule108/E-commerce-project-springBoot.git"
+        GIT_BRANCH      = "master2"
         SSH_CRED_ID     = "node-app-key"
         EC2_IP          = "13.127.217.194"
         REMOTE_USER     = "ubuntu"
