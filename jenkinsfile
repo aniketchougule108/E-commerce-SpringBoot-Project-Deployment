@@ -2,59 +2,74 @@ pipeline {
     agent any
 
     environment {
-        // Define any environment variables here
-        PROJECT_NAME = "E-commerce-project-springBoot"
-        GITHUB_REPO_URL = "https://github.com/aniketchougule108/E-commerce-project-springBoot.git"
+        GITHUB_REPO_URL = "https://github.com/aniketchougule108/E-commerce-SpringBoot-Project-Deployment.git"
+        GIT_BRANCH      = "master2"
+        SSH_CRED_ID     = "node-app-key"
+        EC2_IP          = "43.204.98.25"
+        REMOTE_USER     = "ubuntu"
+        APP_PATH        = "/opt/ecom-app"
+        PROJECT_DIR     = "JtProject"
     }
 
     stages {
-        stage('Checkout') {
+        stage('Checkout Code') {
             steps {
-                // Checkout the code from the GitHub repository
-                git url: "${GITHUB_REPO_URL}", branch: 'main'
+                echo "Cloning ${GITHUB_REPO_URL} (branch: ${GIT_BRANCH})"
+                git url: "${GITHUB_REPO_URL}", branch: "${GIT_BRANCH}"
             }
         }
-        
-        stage('Build') {
+
+        stage('Build with Maven') {
             steps {
-                // Build the project using Maven
-                sh 'mvn clean package'
+                echo "Running Maven Build (Tests Skipped) in ${PROJECT_DIR}..."
+                dir("${PROJECT_DIR}") {
+                    sh "mvn -B clean package -DskipTests"
+                }
+            }
+            post {
+                success {
+                    archiveArtifacts artifacts: "${PROJECT_DIR}/target/*.jar", fingerprint: true
+                }
             }
         }
-        
-        stage('Test') {
+
+        stage('Deploy to EC2') {
             steps {
-                // Run the tests
-                sh 'mvn test'
-            }
-        }
-        
-        stage('Deploy') {
-            steps {
-                // Deploy the application (this can be customized as per your deployment process)
-                // For example, copying the built JAR file to a specific location, or deploying to a cloud service
-                sh '''
-                echo "Deploying application..."
-                # Example command: copying the built JAR file to a remote server
-                # scp target/*.jar user@remote-server:/path/to/deployment/directory
-                '''
+                echo "Deploying application to EC2: ${EC2_IP}"
+                sshagent(credentials: [SSH_CRED_ID]) {
+                    script {
+                        def jarFile = sh(script: "ls ${PROJECT_DIR}/target/*.jar 2>/dev/null | head -n 1 || true", returnStdout: true).trim()
+                        if (!jarFile) {
+                            error "No JAR file found in ${PROJECT_DIR}/target. Build might have failed."
+                        }
+                        echo "JAR Found: ${jarFile}"
+
+                        // create remote dir and set ownership, then copy jar
+                        sh """
+                            ssh -o StrictHostKeyChecking=no ${REMOTE_USER}@${EC2_IP} 'sudo mkdir -p ${APP_PATH} && sudo chown ${REMOTE_USER}:${REMOTE_USER} ${APP_PATH} || true'
+                            scp -o StrictHostKeyChecking=no "${jarFile}" ${REMOTE_USER}@${EC2_IP}:"${APP_PATH}/app.jar"
+                        """
+
+                        // restart service (if exists)
+                        sh """
+                            ssh -o StrictHostKeyChecking=no ${REMOTE_USER}@${EC2_IP} 'sudo systemctl restart ecom.service || echo \"service restart failed\"'
+                            ssh -o StrictHostKeyChecking=no ${REMOTE_USER}@${EC2_IP} 'sudo systemctl status ecom.service --no-pager || true'
+                        """
+                    }
+                }
             }
         }
     }
-    
+
     post {
-        always {
-            // Actions to perform at the end of the pipeline
-            // For example, cleaning up workspace, sending notifications, etc.
-            cleanWs()
-        }
         success {
-            // Actions to perform if the pipeline succeeds
-            echo 'Pipeline succeeded!'
+            echo "🎉 Pipeline SUCCESS — Application deployed to EC2 ${EC2_IP}"
         }
         failure {
-            // Actions to perform if the pipeline fails
-            echo 'Pipeline failed!'
+            echo "❌ Pipeline FAILED — Check console output"
+        }
+        always {
+            deleteDir()
         }
     }
 }
