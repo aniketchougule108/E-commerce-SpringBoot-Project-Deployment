@@ -4,7 +4,7 @@ pipeline {
     environment {
         GITHUB_REPO_URL = "https://github.com/aniketchougule108/E-commerce-SpringBoot-Project-Deployment.git"
         GIT_BRANCH      = "main"
-        SSH_CRED_ID     = "node-app-key"
+        SSH_CRED_ID     = "jarvis-key"
         EC2_IP          = "52.66.92.181"
         REMOTE_USER     = "ubuntu"
         APP_PATH        = "/opt/ecom-app"
