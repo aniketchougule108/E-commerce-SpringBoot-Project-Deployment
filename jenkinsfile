@@ -4,50 +4,54 @@ pipeline {
     environment {
         GITHUB_REPO_URL = "https://github.com/aniketchougule108/E-commerce-SpringBoot-Project-Deployment.git"
         GIT_BRANCH      = "main"
-        SSH_CRED_ID     = "jarvis-key"           // Your Jenkins SSH credential ID
+        SSH_CRED_ID     = "jarvis-key"
         EC2_IP          = "52.66.92.181"
-        REMOTE_USER     = "ubuntu"            // Change if using another AMI user
+        REMOTE_USER     = "ubuntu"
         APP_PATH        = "/opt/ecom-app"
         PROJECT_DIR     = "JtProject"
-        JAR_NAME        = "app.jar"           // Name for the JAR on remote server
-        SERVICE_NAME    = "ecom.service"     // Name of systemd service on EC2
+        JAR_NAME        = "app.jar"
+        SERVICE_NAME    = "ecom.service"
     }
 
     options {
         durabilityHint('MAX_SURVIVABILITY')
-        timestamps()
+        // Removed timestamps() from here
     }
 
     stages {
 
         stage('Checkout Code') {
             steps {
-                echo "Cloning ${env.GITHUB_REPO_URL} (branch: ${env.GIT_BRANCH})"
-                checkout([$class: 'GitSCM',
-                    branches: [[name: "refs/heads/${env.GIT_BRANCH}"]],
-                    userRemoteConfigs: [[url: env.GITHUB_REPO_URL]],
-                    extensions: [[$class: 'CloneOption', noTags: false, shallow: false]]
-                ])
+                timestamps {
+                    echo "Cloning ${env.GITHUB_REPO_URL} (branch: ${env.GIT_BRANCH})"
+                    checkout([$class: 'GitSCM',
+                        branches: [[name: "refs/heads/${env.GIT_BRANCH}"]],
+                        userRemoteConfigs: [[url: env.GITHUB_REPO_URL]],
+                        extensions: [[$class: 'CloneOption', noTags: false, shallow: false]]
+                    ])
+                }
             }
         }
 
         stage('Build with Maven') {
             steps {
-                echo "Running Maven Build in ${env.PROJECT_DIR}..."
-                dir("${env.PROJECT_DIR}") {
-                    timeout(time: 15, unit: 'MINUTES') {
-                        retry(2) {
-                            sh 'mvn -B clean package -DskipTests'
+                timestamps {
+                    echo "Running Maven Build in ${env.PROJECT_DIR}..."
+                    dir("${env.PROJECT_DIR}") {
+                        timeout(time: 15, unit: 'MINUTES') {
+                            retry(2) {
+                                sh 'mvn -B clean package -DskipTests'
+                            }
                         }
-                    }
-                    script {
-                        def jarFile = sh(script: "ls target/*.jar 2>/dev/null | head -n 1 || true", returnStdout: true).trim()
-                        if (!jarFile) {
-                            error "No JAR file found in ${env.PROJECT_DIR}/target. Build failed."
+                        script {
+                            def jarFile = sh(script: "ls target/*.jar 2>/dev/null | head -n 1 || true", returnStdout: true).trim()
+                            if (!jarFile) {
+                                error "No JAR file found in ${env.PROJECT_DIR}/target. Build failed."
+                            }
+                            echo "Built JAR: ${jarFile}"
+                            stash name: 'app-jar', includes: 'target/*.jar'
+                            archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
                         }
-                        echo "Built JAR: ${jarFile}"
-                        stash name: 'app-jar', includes: 'target/*.jar'
-                        archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
                     }
                 }
             }
@@ -55,30 +59,32 @@ pipeline {
 
         stage('Deploy to EC2') {
             steps {
-                echo "Deploying application to EC2: ${env.EC2_IP}"
-                unstash 'app-jar'
-                sshagent(credentials: [env.SSH_CRED_ID]) {
-                    script {
-                        def localJar = sh(script: "ls ${env.PROJECT_DIR}/target/*.jar | head -n 1", returnStdout: true).trim()
-                        if (!localJar) {
-                            error "Missing JAR before deploy: ${env.PROJECT_DIR}/target/*.jar"
+                timestamps {
+                    echo "Deploying application to EC2: ${env.EC2_IP}"
+                    unstash 'app-jar'
+                    sshagent(credentials: [env.SSH_CRED_ID]) {
+                        script {
+                            def localJar = sh(script: "ls ${env.PROJECT_DIR}/target/*.jar | head -n 1", returnStdout: true).trim()
+                            if (!localJar) {
+                                error "Missing JAR before deploy: ${env.PROJECT_DIR}/target/*.jar"
+                            }
+                            echo "JAR Found for deploy: ${localJar}"
+
+                            sh """
+                                set -e
+                                echo "Creating remote directory..."
+                                ssh -o StrictHostKeyChecking=no ${env.REMOTE_USER}@${env.EC2_IP} 'sudo mkdir -p ${env.APP_PATH} && sudo chown ${env.REMOTE_USER}:${env.REMOTE_USER} ${env.APP_PATH}'
+                                
+                                echo "Copying JAR to remote..."
+                                scp -o StrictHostKeyChecking=no "${localJar}" ${env.REMOTE_USER}@${env.EC2_IP}:${env.APP_PATH}/${env.JAR_NAME}
+
+                                echo "Restarting service ${env.SERVICE_NAME}..."
+                                ssh -o StrictHostKeyChecking=no ${env.REMOTE_USER}@${env.EC2_IP} 'sudo systemctl daemon-reload || true; sudo systemctl restart ${env.SERVICE_NAME} || echo "service restart failed"'
+
+                                echo "Service status:"
+                                ssh -o StrictHostKeyChecking=no ${env.REMOTE_USER}@${env.EC2_IP} 'sudo systemctl status ${env.SERVICE_NAME} --no-pager || true'
+                            """
                         }
-                        echo "JAR Found for deploy: ${localJar}"
-
-                        sh """
-                            set -e
-                            echo "Creating remote directory..."
-                            ssh -o StrictHostKeyChecking=no ${env.REMOTE_USER}@${env.EC2_IP} 'sudo mkdir -p ${env.APP_PATH} && sudo chown ${env.REMOTE_USER}:${env.REMOTE_USER} ${env.APP_PATH}'
-                            
-                            echo "Copying JAR to remote..."
-                            scp -o StrictHostKeyChecking=no "${localJar}" ${env.REMOTE_USER}@${env.EC2_IP}:${env.APP_PATH}/${env.JAR_NAME}
-
-                            echo "Restarting service ${env.SERVICE_NAME}..."
-                            ssh -o StrictHostKeyChecking=no ${env.REMOTE_USER}@${env.EC2_IP} 'sudo systemctl daemon-reload || true; sudo systemctl restart ${env.SERVICE_NAME} || echo "service restart failed"'
-
-                            echo "Service status:"
-                            ssh -o StrictHostKeyChecking=no ${env.REMOTE_USER}@${env.EC2_IP} 'sudo systemctl status ${env.SERVICE_NAME} --no-pager || true'
-                        """
                     }
                 }
             }
@@ -86,10 +92,12 @@ pipeline {
 
         stage('Smoke Check') {
             steps {
-                script {
-                    def url = "http://${env.EC2_IP}:8080"
-                    echo "Running simple smoke check against ${url}"
-                    sh returnStatus: true, script: "curl -sSf --max-time 10 ${url} || echo 'Smoke check failed or not reachable'"
+                timestamps {
+                    script {
+                        def url = "http://${env.EC2_IP}:8080"
+                        echo "Running simple smoke check against ${url}"
+                        sh returnStatus: true, script: "curl -sSf --max-time 10 ${url} || echo 'Smoke check failed or not reachable'"
+                    }
                 }
             }
         }
